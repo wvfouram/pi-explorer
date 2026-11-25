@@ -37,7 +37,65 @@ RECENT_FILE = os.path.join(GLib.get_user_data_dir(), "recently-used.xbel")
 LOC_HOME = "::home"
 LOC_PC = "::pc"
 LOC_TRASH = "::trash"
-LOC_NAMES = {LOC_HOME: "Home", LOC_PC: "This PC", LOC_TRASH: "Recycle Bin"}
+LOC_NET = "::net"
+LOC_NAMES = {LOC_HOME: "Home", LOC_PC: "This PC", LOC_TRASH: "Recycle Bin", LOC_NET: "Network"}
+PAGE_MODES = ("home", "pc", "net", "nethost")
+HELPER = "/usr/local/lib/pi-explorer/pie-helper"
+SHARES_CONF = "/etc/samba/pi-explorer-shares.conf"
+
+
+def is_special(loc):
+    return bool(loc) and loc.startswith("::")
+
+
+def host_loc(uri):
+    return "::net/" + uri
+
+
+def loc_host_uri(loc):
+    return loc[6:] if loc and loc.startswith("::net/") else None
+
+
+def uri_host(uri):
+    try:
+        return urllib.parse.urlparse(uri).hostname or uri
+    except ValueError:
+        return uri
+
+
+def loc_kind(loc):
+    if loc in (LOC_HOME,):
+        return "home"
+    if loc == LOC_PC:
+        return "pc"
+    if loc == LOC_TRASH:
+        return "recycle"
+    if loc == LOC_NET:
+        return "net"
+    if loc_host_uri(loc):
+        return "netpc"
+    if loc == "/":
+        return "drive-sys"
+    if loc == USER_DIRS[0][1]:
+        return "desktop"
+    if is_gvfs_path(loc):
+        return "netshare"
+    return USER_DIR_KIND.get(loc, "folder")
+
+
+def is_gvfs_path(p):
+    return bool(p) and re.search(r"/\.?gvfs/[^/]+:", p + "/") is not None
+
+
+def gvfs_label(p):
+    """Readable name for a gvfs fuse mount folder like smb-share:server=nas,share=media."""
+    base = os.path.basename(p.rstrip("/"))
+    m = re.match(r"smb-share:(.*)", base)
+    if m:
+        kv = dict(x.split("=", 1) for x in m.group(1).split(",") if "=" in x)
+        if "share" in kv:
+            return f"{kv['share']} ({kv.get('server', '')})"
+    return base
 
 C_ACCENT = "#4CC2FF"
 
@@ -123,6 +181,10 @@ def esc(s):
 def disp_name(path):
     if path in LOC_NAMES:
         return LOC_NAMES[path]
+    if loc_host_uri(path):
+        return uri_host(loc_host_uri(path))
+    if is_gvfs_path(path) and os.path.dirname(path.rstrip("/")).endswith("gvfs"):
+        return gvfs_label(path)
     if path == "/":
         return "System (/)"
     if os.path.realpath(path) == os.path.realpath(HOME):
@@ -694,6 +756,26 @@ def draw_glyph(cr, name, s, col):
         L((8, 7), (8, 11.5))
         cr.arc(8, 4.8, 0.9, 0, 2 * pi)
         cr.fill()
+    elif name == "share":
+        cr.arc(4, 8, 1.8, 0, 2 * pi)
+        cr.stroke()
+        cr.arc(12, 3.8, 1.8, 0, 2 * pi)
+        cr.stroke()
+        cr.arc(12, 12.2, 1.8, 0, 2 * pi)
+        cr.stroke()
+        L((5.6, 7.1), (10.4, 4.7))
+        L((5.6, 8.9), (10.4, 11.3))
+    elif name == "network":
+        _rr(cr, 5, 1.5, 6, 4.5, 1)
+        cr.stroke()
+        L((8, 6), (8, 9))
+        L((3, 9), (13, 9))
+        L((3, 9), (3, 11))
+        L((13, 9), (13, 11))
+        _rr(cr, 1, 11, 4, 3.5, 0.8)
+        cr.stroke()
+        _rr(cr, 11, 11, 4, 3.5, 0.8)
+        cr.stroke()
     elif name == "link":
         cr.arc(5.5, 10.5, 3, pi * 0.25, pi * 1.75)
         cr.stroke()
@@ -874,6 +956,38 @@ def draw_place(cr, kind, s):
         cr.rectangle(6.6, 11.6, 2.8, 1.6)
         cr.fill()
         _rr(cr, 4.5, 13, 7, 1.3, 0.6)
+        cr.fill()
+    elif kind in ("net", "netpc"):
+        def mon(x, y, w, h, screen):
+            cr.set_source_rgba(*hexc("#4A4A4A"))
+            _rr(cr, x, y, w, h, 0.8)
+            cr.fill()
+            cr.set_source_rgba(*hexc(screen))
+            _rr(cr, x + 0.6, y + 0.6, w - 1.2, h - 1.2, 0.4)
+            cr.fill()
+        if kind == "netpc":
+            mon(1, 2, 14, 9.6, "#56B4F5")
+            cr.set_source_rgba(*hexc("#A0A0A0"))
+            cr.rectangle(6.6, 11.6, 2.8, 1.6)
+            cr.fill()
+            _rr(cr, 4.5, 13, 7, 1.3, 0.6)
+            cr.fill()
+        else:
+            mon(1, 1.5, 8.5, 6.5, "#56B4F5")
+            mon(6.5, 6, 8.5, 6.5, "#3A8DDE")
+            cr.set_source_rgba(*hexc("#6CCB5F"))
+            cr.set_line_width(1.0)
+            _line(cr, (3.5, 8), (3.5, 14.5), (10.5, 14.5), (10.5, 12.5))
+    elif kind == "netshare":
+        _folder(cr)
+        cr.set_source_rgba(*hexc("#2F7ED8"))
+        cr.set_line_width(0.9)
+        _line(cr, (8, 8), (8, 12))
+        _line(cr, (5, 12), (11, 12))
+        for x in (5, 11):
+            cr.arc(x, 12, 0.9, 0, 2 * pi)
+            cr.fill()
+        _rr(cr, 6.4, 6.8, 3.2, 2.2, 0.4)
         cr.fill()
     elif kind == "home":
         cr.set_source_rgba(*hexc("#F2C14E"))
@@ -1900,6 +2014,133 @@ class FileJob(threading.Thread):
 
 
 # ----------------------------------------------------------------------------
+# Network: mounted network shares, Samba shares on this Pi
+# ----------------------------------------------------------------------------
+def network_mounts():
+    """Gio mounts of network shares (smb, sftp, nfs...) that have a local fuse path."""
+    out = []
+    try:
+        for m in Gio.VolumeMonitor.get().get_mounts():
+            root = m.get_root()
+            uri = root.get_uri() or ""
+            if uri.startswith("file://") or not root.get_path():
+                continue
+            path = root.get_path()
+            name = m.get_name()
+            if uri.startswith("smb://"):
+                u = urllib.parse.urlparse(uri)
+                share = u.path.strip("/").split("/")[0]
+                name = f"{share} ({u.hostname})" if share else name
+            out.append({"name": name, "path": path, "uri": uri, "mount": m})
+    except Exception:
+        pass
+    return out
+
+
+def samba_installed():
+    return shutil.which("testparm") is not None or os.path.exists("/usr/sbin/smbd")
+
+
+def _testparm():
+    exe = shutil.which("testparm") or "/usr/bin/testparm"
+    try:
+        r = subprocess.run([exe, "-s", "--suppress-prompt"], capture_output=True, text=True, timeout=8)
+        return r.stdout
+    except (OSError, subprocess.SubprocessError):
+        try:
+            with open("/etc/samba/smb.conf") as f:
+                return f.read()
+        except OSError:
+            return ""
+
+
+def samba_config():
+    """Return (global dict, {share: dict}) from the Samba config."""
+    glob, shares, cur = {}, {}, None
+    for ln in _testparm().splitlines():
+        ln = ln.strip()
+        if not ln or ln[0] in "#;":
+            continue
+        m = re.match(r"^\[(.+)\]$", ln)
+        if m:
+            name = m.group(1)
+            cur = glob if name.lower() == "global" else shares.setdefault(name, {})
+            continue
+        if cur is not None and "=" in ln:
+            k, v = ln.split("=", 1)
+            cur[k.strip().lower()] = v.strip()
+    return glob, shares
+
+
+def our_shares():
+    names = set()
+    try:
+        with open(SHARES_CONF) as f:
+            for ln in f:
+                m = re.match(r"^\s*\[(.+)\]\s*$", ln)
+                if m:
+                    names.add(m.group(1))
+    except OSError:
+        pass
+    return names
+
+
+def list_shares():
+    """Folders this Pi shares over the network. List of dicts: name, path, comment, readonly, ours."""
+    glob, shares = samba_config()
+    mine = our_shares()
+    out = []
+    for name, d in shares.items():
+        if name.lower() in ("printers", "print$", "homes") or d.get("printable", "no").lower() in ("yes", "true"):
+            continue
+        path = d.get("path", "")
+        if not path:
+            continue
+        ro = d.get("read only", d.get("readonly", "yes")).lower() in ("yes", "true", "1")
+        if d.get("writable", d.get("writeable", "")).lower() in ("yes", "true", "1"):
+            ro = False
+        out.append({"name": name, "path": path, "comment": d.get("comment", ""), "readonly": ro,
+                    "ours": name in mine})
+    return out
+
+
+def share_for_path(path):
+    rp = os.path.realpath(path)
+    for s in list_shares():
+        if os.path.realpath(s["path"]) == rp:
+            return s
+    return None
+
+
+def server_name():
+    glob, _ = samba_config()
+    nb = glob.get("netbios name")
+    if nb:
+        return nb.upper()
+    return (os.uname().nodename.split(".")[0] or "raspberrypi").upper()
+
+
+def helper_available():
+    return os.path.exists(HELPER)
+
+
+def run_helper(*args):
+    """Run the root helper through sudo. Returns (ok, message)."""
+    try:
+        r = subprocess.run(["sudo", "-n", HELPER] + list(args), capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError) as e:
+        return False, str(e)
+    msg = (r.stdout + r.stderr).strip()
+    return r.returncode == 0, msg
+
+
+def share_name_from(path):
+    base = os.path.basename(path.rstrip("/")) or "share"
+    name = re.sub(r"[^A-Za-z0-9_-]+", "-", base).strip("-") or "share"
+    return name[:40]
+
+
+# ----------------------------------------------------------------------------
 # Small widget helpers
 # ----------------------------------------------------------------------------
 def label(text="", cls=None, xalign=0.0, ellipsize=False, wrap=False, markup=False):
@@ -2064,9 +2305,10 @@ class WinDialog(Gtk.Window):
     def done(self, ok):
         cb = self.cb
         self.cb = None
-        self.destroy()
+        self.hide()
         if cb:
             cb(ok)
+        self.destroy()
 
     def ask(self, cb=None):
         self.cb = cb
@@ -2218,6 +2460,88 @@ class ProgressWindow(Gtk.Window):
                  (f"{int(secs)} sec" if secs >= 2 else "a few seconds"))
             self.l_speed.set_text(f"Speed: {fmt_size(self.speed)}/s    Time remaining: {'about ' + t if secs >= 2 else t}")
         return True
+
+
+class NetMountOp(Gio.MountOperation):
+    """Windows-style 'Enter network credentials' prompt for mounting network folders."""
+    _live = set()
+
+    def __init__(self, parent):
+        super().__init__()
+        self.parent_win = parent
+        NetMountOp._live.add(self)
+        GLib.timeout_add_seconds(300, lambda: NetMountOp._live.discard(self) and False)
+
+    def do_ask_password(self, message, default_user, default_domain, flags):
+        op = self
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        first = (message or "").splitlines()[0] if message else ""
+        if first:
+            box.pack_start(label(first, "sec", wrap=True), False, False, 0)
+        user = Gtk.Entry()
+        add_cls(user, "field")
+        user.set_placeholder_text("User name")
+        if default_user and default_user.lower() not in ("guest", "anonymous"):
+            user.set_text(default_user)
+        pw = Gtk.Entry()
+        add_cls(pw, "field")
+        pw.set_placeholder_text("Password")
+        pw.set_visibility(False)
+        pw.set_activates_default(True)
+        user.set_activates_default(True)
+        need_user = bool(flags & Gio.AskPasswordFlags.NEED_USERNAME)
+        need_pw = bool(flags & Gio.AskPasswordFlags.NEED_PASSWORD)
+        if need_user:
+            box.pack_start(user, False, False, 0)
+        if need_pw:
+            box.pack_start(pw, False, False, 0)
+        guest = None
+        if flags & Gio.AskPasswordFlags.ANONYMOUS_SUPPORTED:
+            guest = Gtk.CheckButton(label="Connect as guest (no password)")
+            box.pack_start(guest, False, False, 0)
+        remember = None
+        if flags & Gio.AskPasswordFlags.SAVING_SUPPORTED:
+            remember = Gtk.CheckButton(label="Remember my credentials")
+            remember.set_active(True)
+            box.pack_start(remember, False, False, 0)
+        dlg = WinDialog(self.parent_win, "Enter network credentials", None, primary="OK", extra=box)
+
+        def done(ok):
+            if not ok:
+                op.reply(Gio.MountOperationResult.ABORTED)
+                return
+            if guest is not None and guest.get_active():
+                op.set_anonymous(True)
+            else:
+                op.set_anonymous(False)
+                if need_user:
+                    op.set_username(user.get_text())
+                if need_pw:
+                    op.set_password(pw.get_text())
+                if default_domain:
+                    op.set_domain(default_domain)
+            op.set_password_save(Gio.PasswordSave.PERMANENTLY if remember is not None and remember.get_active()
+                                 else Gio.PasswordSave.NEVER)
+            op.reply(Gio.MountOperationResult.HANDLED)
+        dlg.ask(done)
+        (user if need_user and not user.get_text() else pw).grab_focus()
+
+    def do_ask_question(self, message, choices):
+        op = self
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        dlg = WinDialog(self.parent_win, "File Explorer", message, primary=None, secondary="Cancel", extra=box)
+        for i, c in enumerate(choices):
+            b = Gtk.Button(label=c)
+            add_cls(b, "secondary")
+
+            def pick(w, i=i):
+                dlg.cb = None
+                dlg.destroy()
+                op.set_choice(i)
+                op.reply(Gio.MountOperationResult.HANDLED)
+            b.connect("clicked", pick)
+            box.pack_start(b, False, False, 0)
+        dlg.ask(lambda ok: op.reply(Gio.MountOperationResult.ABORTED))
 
 
 # ----------------------------------------------------------------------------
@@ -2423,11 +2747,13 @@ class FolderView(Gtk.Box):
         self._build_icons()
         self.home_box = Gtk.ScrolledWindow()
         self.pc_box = Gtk.ScrolledWindow()
-        for sw in (self.home_box, self.pc_box):
+        self.net_box = Gtk.ScrolledWindow()
+        for sw in (self.home_box, self.pc_box, self.net_box):
             sw.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
             add_cls(sw, "content")
         self.stack.add_named(self.home_box, "home")
         self.stack.add_named(self.pc_box, "pc")
+        self.stack.add_named(self.net_box, "net")
         self.show_all()
         self.navigate(loc, select=select)
 
@@ -2607,7 +2933,7 @@ class FolderView(Gtk.Box):
 
     # ---------------- navigation
     def navigate(self, loc, push=True, select=None):
-        if loc not in LOC_NAMES:
+        if not is_special(loc):
             loc = os.path.abspath(os.path.expanduser(loc))
         if push:
             self.history = self.history[:self.hpos + 1]
@@ -2635,7 +2961,7 @@ class FolderView(Gtk.Box):
             prev = self.loc
             self.hpos -= 1
             self.navigate(self.history[self.hpos], push=False,
-                          select=[prev] if prev not in LOC_NAMES else None)
+                          select=[prev] if not is_special(prev) else None)
 
     def forward(self):
         if self.can_forward():
@@ -2643,8 +2969,10 @@ class FolderView(Gtk.Box):
             self.navigate(self.history[self.hpos], push=False)
 
     def parent(self):
-        if self.loc in (LOC_TRASH, LOC_HOME):
+        if self.loc in (LOC_TRASH, LOC_HOME, LOC_NET):
             return None
+        if loc_host_uri(self.loc):
+            return LOC_NET
         if self.loc == LOC_PC:
             return None
         if self.loc == "/":
@@ -2657,7 +2985,7 @@ class FolderView(Gtk.Box):
             self.navigate(p, select=[self.loc])
 
     def is_folder(self):
-        return self.loc not in LOC_NAMES
+        return not is_special(self.loc)
 
     # ---------------- loading
     def _view_mode_for(self, loc):
@@ -2687,8 +3015,8 @@ class FolderView(Gtk.Box):
         self.select_paths(sel)
 
     def _show_files_view(self):
-        if self.mode in ("home", "pc"):
-            self.stack.set_visible_child_name(self.mode)
+        if self.mode in PAGE_MODES:
+            self.stack.set_visible_child_name("net" if self.mode == "nethost" else self.mode)
             return
         if self.view_mode == "details" or self.mode == "trash":
             self.stack.set_visible_child_name("details")
@@ -2722,6 +3050,12 @@ class FolderView(Gtk.Box):
             self.mode = "pc"
             self._build_pc()
             self._show_files_view()
+            self.win.on_items(self)
+            return
+        if loc == LOC_NET or loc_host_uri(loc):
+            self.mode = "net" if loc == LOC_NET else "nethost"
+            self._show_files_view()
+            (self._build_net if loc == LOC_NET else self._build_nethost)()
             self.win.on_items(self)
             return
         self.view_mode = self._view_mode_for(loc)
@@ -2870,7 +3204,7 @@ class FolderView(Gtk.Box):
             m.set_visible(bool(text))
 
     def refresh(self):
-        if self.mode in ("home", "pc"):
+        if self.mode in PAGE_MODES:
             self.load()
             return
         sel = self.selected_paths()
@@ -3015,7 +3349,7 @@ class FolderView(Gtk.Box):
 
     # ---------------- selection
     def selected_paths(self):
-        if self.mode in ("home", "pc"):
+        if self.mode in PAGE_MODES:
             return []
         out = []
         if self.cur_view() == "details":
@@ -3567,12 +3901,252 @@ def _build_pc(self):
             t.connect("clicked", lambda w, v=vol: self.app.mount_volume(self.win, v, self))
         fb2.add(t)
     box.pack_start(fb2, False, False, 0)
+    mounts = network_mounts()
+    if mounts:
+        box.pack_start(section("Network locations"), False, False, 8)
+        fb3 = flow()
+        for m in mounts:
+            t = Tile("netshare", m["name"], m["uri"], width=280)
+            _tile_events(self, t, m["path"], [{"label": "Disconnect", "icon": "eject",
+                                               "cb": lambda p=m["path"]: self.app.eject(self.win, p)}])
+            fb3.add(t)
+        box.pack_start(fb3, False, False, 0)
     self.pc_box.add(box)
     self.pc_box.show_all()
 
 
 FolderView._build_home = _build_home
 FolderView._build_pc = _build_pc
+
+
+# ----------------------------------------------------------------------------
+# Network pages
+# ----------------------------------------------------------------------------
+def _menu_at(view, widget, ev, spec):
+    m = build_menu(spec)
+    view.win._menu = m
+    popup_menu(m, widget, ev)
+
+
+def _right_click(widget, cb):
+    def press(w, ev):
+        if ev.type == Gdk.EventType.BUTTON_PRESS and ev.button == 3:
+            cb(w, ev)
+            return True
+        return False
+    widget.connect("button-press-event", press)
+
+
+def _build_net(self):
+    _clear(self.net_box)
+    gen = self.gen
+    box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+    box.set_margin_bottom(20)
+    srv = server_name()
+
+    # --- shared from this Pi
+    head = section(f"Shared from this Pi  (\\\\{srv})")
+    sb = tb_button("share", "Share a folder", lambda w: self.app.pick_and_share(self.win))
+    head.pack_end(sb, False, False, 0)
+    box.pack_start(head, False, False, 0)
+    fb = flow()
+    if not samba_installed():
+        lb = label("Sharing folders needs Samba. Install it with:  sudo apt install samba", "empty-msg")
+        lb.set_selectable(True)
+        lb.set_margin_start(22)
+        box.pack_start(lb, False, False, 0)
+        sb.set_sensitive(False)
+    else:
+        shares = list_shares()
+        for s in shares:
+            sub = s["path"] + ("   (read-only)" if s["readonly"] else "")
+            t = Tile("netshare", s["name"], sub, width=280)
+            t.set_tooltip_text(f"\\\\{srv}\\{s['name']}")
+            t.connect("clicked", lambda w, p=s["path"]: self.navigate(p))
+
+            def menu(w, ev, s=s):
+                spec = [
+                    {"label": "Open", "icon": "open", "cb": lambda: self.navigate(s["path"])},
+                    {"label": "Open in new tab", "icon": "newtab", "cb": lambda: self.win.new_tab(s["path"], switch=False)},
+                    None,
+                    {"label": "Copy network path", "icon": "link",
+                     "cb": lambda: self.app.copy_text(f"\\\\{srv}\\{s['name']}")},
+                    {"label": "Stop sharing", "icon": "close", "sensitive": s["ours"],
+                     "cb": lambda: self.app.unshare(self.win, s["name"])},
+                    None,
+                    {"label": "Properties", "icon": "properties",
+                     "cb": lambda: PropertiesDialog(self.win, [s["path"]]).show_all()},
+                ]
+                _menu_at(self, w, ev, spec)
+            _right_click(t, menu)
+            fb.add(t)
+        if not shares:
+            fb.add(label("No folders are shared yet. Right-click a folder > Share on network.", "empty-msg"))
+        box.pack_start(fb, False, False, 0)
+
+    # --- connected network folders
+    mounts = network_mounts()
+    if mounts:
+        box.pack_start(section("Connected network folders"), False, False, 8)
+        fb3 = flow()
+        for m in mounts:
+            t = Tile("netshare", m["name"], m["uri"], width=280)
+            t.connect("clicked", lambda w, p=m["path"]: self.navigate(p))
+            _right_click(t, lambda w, ev, m=m: _menu_at(self, w, ev, [
+                {"label": "Open", "icon": "open", "cb": lambda: self.navigate(m["path"])},
+                {"label": "Open in new tab", "icon": "newtab", "cb": lambda: self.win.new_tab(m["path"], switch=False)},
+                {"label": "Pin to Quick access", "icon": "pin", "cb": lambda: self.app.pin(m["path"])},
+                None,
+                {"label": "Disconnect", "icon": "eject", "cb": lambda: self.app.eject(self.win, m["path"])},
+            ]))
+            fb3.add(t)
+        box.pack_start(fb3, False, False, 0)
+
+    # --- computers on the network
+    box.pack_start(section("Computers and devices"), False, False, 8)
+    fb2 = flow()
+    status = label("Looking for computers on your network...", "empty-msg")
+    status.set_margin_start(22)
+    box.pack_start(status, False, False, 0)
+    box.pack_start(fb2, False, False, 0)
+
+    # --- connect by address
+    box.pack_start(section("Open a network folder"), False, False, 8)
+    row = Gtk.Box(spacing=8)
+    row.set_margin_start(22)
+    row.set_margin_end(22)
+    ent = Gtk.Entry()
+    add_cls(ent, "field")
+    ent.set_placeholder_text("\\\\server\\share   or   smb://server/share")
+    ent.set_size_request(380, -1)
+    go = Gtk.Button(label="Open")
+    add_cls(go, "primary")
+    act = lambda *_: ent.get_text().strip() and self.app.open_network_path(self.win, self, ent.get_text().strip())  # noqa: E731
+    ent.connect("activate", act)
+    go.connect("clicked", act)
+    row.pack_start(ent, False, False, 0)
+    row.pack_start(go, False, False, 0)
+    box.pack_start(row, False, False, 0)
+    hint = label("You'll be asked for a username and password if the folder needs one.", "ter")
+    hint.set_margin_start(22)
+    hint.set_margin_top(4)
+    box.pack_start(hint, False, False, 0)
+
+    self.net_box.add(box)
+    self.net_box.show_all()
+
+    def found(items, err):
+        if gen != self.gen or self.mode != "net":
+            return False
+        for name, uri in items:
+            t = Tile("netpc", name, uri_host(uri) if uri_host(uri) != name else None, width=240)
+            t.connect("clicked", lambda w, u=uri: self.navigate(host_loc(u)))
+            fb2.add(t)
+        fb2.show_all()
+        if items:
+            status.hide()
+        else:
+            status.set_text("No computers found. If you know the address, type it below." +
+                            (f"\n({err})" if err else ""))
+        return False
+
+    def work():
+        items, err = [], None
+        try:
+            f = Gio.File.new_for_uri("network:///")
+            en = f.enumerate_children("standard::display-name,standard::target-uri,standard::name",
+                                      Gio.FileQueryInfoFlags.NONE, None)
+            for info in en:
+                uri = info.get_attribute_string("standard::target-uri") or ""
+                if not uri or uri.startswith("network:"):
+                    continue
+                items.append((info.get_display_name(), uri))
+        except GLib.Error as e:
+            err = e.message
+        items.sort(key=lambda x: x[0].casefold())
+        GLib.idle_add(found, items, err)
+    threading.Thread(target=work, daemon=True).start()
+
+
+def _build_nethost(self):
+    _clear(self.net_box)
+    gen = self.gen
+    uri = loc_host_uri(self.loc)
+    host = uri_host(uri)
+    box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+    box.set_margin_bottom(20)
+    box.pack_start(section(f"Shared folders on {host}"), False, False, 0)
+    status = label("Loading...", "empty-msg")
+    status.set_margin_start(22)
+    box.pack_start(status, False, False, 0)
+    fb = flow()
+    box.pack_start(fb, False, False, 0)
+    self.net_box.add(box)
+    self.net_box.show_all()
+
+    def show(items, err):
+        if gen != self.gen:
+            return False
+        for name, suri in items:
+            t = Tile("netshare", name, f"\\\\{host}\\{name}", width=260)
+            t.connect("clicked", lambda w, u=suri: self.app.open_uri(self.win, self, u))
+            _right_click(t, lambda w, ev, u=suri, n=name: _menu_at(self, w, ev, [
+                {"label": "Open", "icon": "open", "cb": lambda: self.app.open_uri(self.win, self, u)},
+                {"label": "Open in new tab", "icon": "newtab",
+                 "cb": lambda: self.app.open_uri(self.win, self.win.new_tab(LOC_NET, switch=True), u)},
+                {"label": "Copy network path", "icon": "link", "cb": lambda: self.app.copy_text(f"\\\\{host}\\{n}")},
+            ]))
+            fb.add(t)
+        fb.show_all()
+        if items:
+            status.hide()
+        else:
+            status.set_text(err or "This computer isn't sharing any folders.")
+        return False
+
+    def need_mount(err_msg):
+        if gen != self.gen:
+            return False
+        gf = Gio.File.new_for_uri(uri)
+
+        def done(f, res):
+            try:
+                f.mount_enclosing_volume_finish(res)
+            except GLib.Error as e:
+                if not e.matches(Gio.io_error_quark(), Gio.IOErrorEnum.ALREADY_MOUNTED):
+                    show([], f"Couldn't connect to {host}: {e.message}")
+                    return
+            start(False)
+        gf.mount_enclosing_volume(Gio.MountMountFlags.NONE, NetMountOp(self.win), None, done)
+        return False
+
+    def start(allow_mount=True):
+        def work():
+            items, err = [], None
+            try:
+                f = Gio.File.new_for_uri(uri)
+                en = f.enumerate_children("standard::display-name,standard::target-uri,standard::name,"
+                                          "standard::type", Gio.FileQueryInfoFlags.NONE, None)
+                for info in en:
+                    name = info.get_display_name()
+                    if name.endswith("$"):
+                        continue
+                    target = info.get_attribute_string("standard::target-uri") or \
+                        uri.rstrip("/") + "/" + urllib.parse.quote(info.get_name())
+                    items.append((name, target))
+            except GLib.Error as e:
+                if allow_mount and e.matches(Gio.io_error_quark(), Gio.IOErrorEnum.NOT_MOUNTED):
+                    GLib.idle_add(need_mount, e.message)
+                    return
+                err = f"Couldn't open {host}: {e.message}"
+            items.sort(key=lambda x: x[0].casefold())
+            GLib.idle_add(show, items, err)
+        threading.Thread(target=work, daemon=True).start()
+    start()
+
+
+FolderView._build_net = _build_net
+FolderView._build_nethost = _build_nethost
 
 
 # ----------------------------------------------------------------------------
@@ -3668,6 +4242,9 @@ class NavPane(Gtk.ScrolledWindow):
             it = self.store.append(pc, [place_pixbuf(d["kind"], 16), drive_label(d), d["path"], None])
             if has_subdirs(d["path"], sh):
                 self.store.append(it, [None, "", DUMMY, None])
+        net = self.store.append(None, [place_pixbuf("net", 16), "Network", LOC_NET, None])
+        for m in network_mounts():
+            self.store.append(net, [place_pixbuf("netshare", 16), m["name"], m["path"], None])
         self.store.append(None, [place_pixbuf("recycle-full" if trash_count() else "recycle", 16), "Recycle Bin",
                                  LOC_TRASH, None])
         self.syncing = False
@@ -3793,7 +4370,7 @@ class NavPane(Gtk.ScrolledWindow):
                             None,
                             {"label": "Empty Recycle Bin", "icon": "trash", "sensitive": trash_count() > 0,
                              "cb": lambda: self.app.empty_trash(self.win)}])
-        elif t in (LOC_HOME, LOC_PC):
+        elif t in (LOC_HOME, LOC_PC, LOC_NET):
             m = build_menu([{"label": "Open", "icon": "open", "cb": lambda: self.win.cur.navigate(t)},
                             {"label": "Open in new tab", "icon": "newtab", "cb": lambda: self.win.new_tab(t)},
                             {"label": "Open in new window", "icon": "open", "cb": lambda: self.app.new_window(t)}])
@@ -3810,7 +4387,7 @@ class NavPane(Gtk.ScrolledWindow):
         if res:
             tp, pos = res
             tgt = self.store[tp][N_TARGET]
-            if tgt in (SEP, DUMMY, LOC_HOME, LOC_PC):
+            if tgt in (SEP, DUMMY, LOC_HOME, LOC_PC, LOC_NET):
                 Gdk.drag_status(ctx, 0, t)
                 tv.set_drag_dest_row(None, Gtk.TreeViewDropPosition.INTO_OR_AFTER)
                 return True
@@ -3829,7 +4406,7 @@ class NavPane(Gtk.ScrolledWindow):
         tgt = self.store[res[0]][N_TARGET]
         if tgt == LOC_TRASH:
             self.app.delete(self.win, paths)
-        elif tgt not in (SEP, DUMMY, LOC_HOME, LOC_PC):
+        elif tgt not in (SEP, DUMMY, LOC_HOME, LOC_PC, LOC_NET):
             self.win.drop_files(paths, tgt, tv)
 
 
@@ -3890,7 +4467,10 @@ class AddressBar(Gtk.Box):
 
     def edit(self):
         loc = self.loc
-        self.entry.set_text(LOC_NAMES[loc] if loc in LOC_NAMES else loc)
+        if loc_host_uri(loc):
+            self.entry.set_text("\\\\" + uri_host(loc_host_uri(loc)))
+        else:
+            self.entry.set_text(LOC_NAMES[loc] if loc in LOC_NAMES else loc)
         self._comp_dir = None
         self.stack.set_visible_child_name("edit")
 
@@ -3939,6 +4519,9 @@ class AddressBar(Gtk.Box):
             return
         if low.startswith("file://"):
             t = uri_to_path(t) or t
+        if t.startswith("\\\\") or low.startswith(("smb://", "//")):
+            self.win.app.open_network_path(self.win, v, t)
+            return
         p = os.path.abspath(os.path.expanduser(t)) if t else HOME
         if os.path.isdir(p):
             v.navigate(p)
@@ -3954,19 +4537,29 @@ class AddressBar(Gtk.Box):
         for c in self.crumbs.get_children():
             self.crumbs.remove(c)
             c.destroy()
+        self.loc_icon.set_icon(loc_kind(loc))
         if loc in LOC_NAMES:
-            kind = {LOC_HOME: "home", LOC_PC: "pc", LOC_TRASH: "recycle"}[loc]
-            self.loc_icon.set_icon(kind)
             parts = [(LOC_NAMES[loc], loc)]
+        elif loc_host_uri(loc):
+            parts = [("Network", LOC_NET), (disp_name(loc), loc)]
         else:
-            kind = USER_DIR_KIND.get(loc, "folder")
-            if loc == "/":
-                kind = "drive-sys"
-            if loc == USER_DIRS[0][1]:
-                kind = "desktop"
-            self.loc_icon.set_icon(kind)
             parts = []
-            if is_inside(loc, HOME):
+            gv = None
+            if is_gvfs_path(loc):
+                cur = loc
+                while cur and os.path.dirname(cur.rstrip("/")) and not os.path.dirname(cur).endswith("gvfs"):
+                    cur = os.path.dirname(cur)
+                gv = cur if os.path.dirname(cur).endswith("gvfs") else None
+            if gv:
+                parts.append(("Network", LOC_NET))
+                parts.append((gvfs_label(gv), gv))
+                cur = gv
+                rel = os.path.relpath(loc, gv)
+                if rel != ".":
+                    for seg in rel.split("/"):
+                        cur = os.path.join(cur, seg)
+                        parts.append((seg, cur))
+            elif is_inside(loc, HOME):
                 rel = os.path.relpath(loc, HOME)
                 parts.append((os.path.basename(HOME), HOME))
                 cur = HOME
@@ -3980,7 +4573,8 @@ class AddressBar(Gtk.Box):
                 for seg in [s for s in loc.split("/") if s]:
                     cur = os.path.join(cur, seg)
                     parts.append((seg, cur))
-            parts.insert(0, ("This PC", LOC_PC))
+            if not gv:
+                parts.insert(0, ("This PC", LOC_PC))
         hidden = []
         if len(parts) > 6:
             hidden = parts[:-5]
@@ -4073,10 +4667,10 @@ class DetailsPane(Gtk.Box):
             return
         if not paths:
             loc = view.loc
-            kind = {LOC_HOME: "home", LOC_PC: "pc", LOC_TRASH: "recycle"}.get(loc, USER_DIR_KIND.get(loc, "folder"))
+            kind = loc_kind(loc)
             self.img.set_from_pixbuf(place_pixbuf(kind, 96))
             self.name.set_text(disp_name(loc))
-            self.sub.set_text(f"{view.count} items" if view.mode not in ("home", "pc") else "")
+            self.sub.set_text(f"{view.count} items" if view.mode not in PAGE_MODES else "")
         elif len(paths) == 1:
             e = Entry(paths[0])
             kind = view._kind_icon(e.path, e.kind)
@@ -4567,12 +5161,7 @@ class TabButton(Gtk.Button):
             self.icon.set_icon("folder")
         else:
             self.lbl.set_text(disp_name(loc))
-            kind = {LOC_HOME: "home", LOC_PC: "pc", LOC_TRASH: "recycle"}.get(loc)
-            if not kind:
-                kind = "drive-sys" if loc == "/" else USER_DIR_KIND.get(loc, "folder")
-                if loc == USER_DIRS[0][1]:
-                    kind = "desktop"
-            self.icon.set_icon(kind)
+            self.icon.set_icon(loc_kind(loc))
         self.set_tooltip_text(LOC_NAMES.get(loc, loc))
 
     def set_active(self, on):
@@ -4849,7 +5438,7 @@ class ExplorerWindow(Gtk.ApplicationWindow):
     def on_items(self, v):
         if v is not self.cur:
             return
-        if v.mode in ("home", "pc"):
+        if v.mode in PAGE_MODES:
             self.l_count.set_text("")
         elif v.mode == "search" and v.searching:
             self.l_count.set_text(f"{v.count:,} items found so far")
@@ -4893,8 +5482,8 @@ class ExplorerWindow(Gtk.ApplicationWindow):
         self.b_del.set_sensitive(n > 0 and (folder or trash))
         self.b_paste.set_sensitive(v.mode == "folder" and self.app.has_clip())
         self.b_new.set_sensitive(v.mode == "folder")
-        self.b_sort.set_sensitive(v.mode not in ("home", "pc"))
-        self.b_view.set_sensitive(v.mode not in ("home", "pc", "trash"))
+        self.b_sort.set_sensitive(v.mode not in PAGE_MODES)
+        self.b_view.set_sensitive(v.mode not in PAGE_MODES + ("trash",))
         arch = n == 1 and folder and Entry(paths[0]).kind == "archive"
         self.b_extract.set_visible(arch)
         self.b_empty.set_visible(trash)
@@ -4903,7 +5492,7 @@ class ExplorerWindow(Gtk.ApplicationWindow):
         self.b_term.set_visible(v.mode == "folder")
         self.sv_icons.get_style_context().remove_class("on")
         self.sv_details.get_style_context().remove_class("on")
-        if v.mode not in ("home", "pc"):
+        if v.mode not in PAGE_MODES:
             (self.sv_details if v.view_mode == "details" or trash else self.sv_icons).get_style_context().add_class("on")
         if self.dpane.get_visible():
             self.dpane.update(v)
@@ -4927,7 +5516,7 @@ class ExplorerWindow(Gtk.ApplicationWindow):
 
     # ---------------- view
     def set_view(self, mode):
-        if self.cur.mode in ("home", "pc", "trash"):
+        if self.cur.mode in PAGE_MODES + ("trash",):
             return
         self.cur.set_view(mode)
         self.on_selection(self.cur)
@@ -5094,6 +5683,14 @@ class ExplorerWindow(Gtk.ApplicationWindow):
                 else:
                     spec.append({"label": "Pin to Quick access", "icon": "pin", "cb": lambda: self.app.pin(p0)})
                 spec.append({"label": "Open in Terminal", "icon": "terminal", "cb": lambda: open_terminal(p0, self)})
+                if not is_gvfs_path(p0):
+                    sh = share_for_path(p0) if samba_installed() else None
+                    if sh and sh["ours"]:
+                        spec.append({"label": "Stop sharing on network", "icon": "share",
+                                     "cb": lambda: self.app.unshare(self, sh["name"])})
+                    elif not sh:
+                        spec.append({"label": "Share on network", "icon": "share",
+                                     "cb": lambda: self.app.share_folder(self, p0)})
             spec += [None, {"label": "Properties", "icon": "properties", "accel": "Alt+Enter", "cb": self.properties}]
         m = build_menu(spec)
         self._menu = m
@@ -5478,7 +6075,7 @@ class ExplorerApp(Gtk.Application):
             w.navpane.rebuild()
             w.navpane.sync(w.cur.loc)
             for v in w.views:
-                if v.mode == "pc":
+                if v.mode in ("pc", "net"):
                     v.load()
                 elif v.is_folder() and not os.path.isdir(v.loc):
                     v.navigate(LOC_PC)
@@ -5739,7 +6336,7 @@ class ExplorerApp(Gtk.Application):
             m = v.get_mount()
             if m:
                 view.navigate(m.get_root().get_path())
-        vol.mount(Gio.MountMountFlags.NONE, Gtk.MountOperation.new(win), None, done)
+        vol.mount(Gio.MountMountFlags.NONE, NetMountOp(win), None, done)
 
     def eject(self, win, path):
         if not self.vm:
@@ -5763,14 +6360,170 @@ class ExplorerApp(Gtk.Application):
                     m.eject_with_operation_finish(res)
                 else:
                     m.unmount_with_operation_finish(res)
-                info_dialog(win, "Safe To Remove Hardware", "The drive can now be safely removed.")
+                if not is_gvfs_path(path):
+                    info_dialog(win, "Safe To Remove Hardware", "The drive can now be safely removed.")
             except GLib.Error as e:
                 info_dialog(win, "Problem Ejecting Drive", e.message)
-        op = Gtk.MountOperation.new(win)
+        op = NetMountOp(win)
         if target.can_eject():
             target.eject_with_operation(Gio.MountUnmountFlags.NONE, op, None, done)
         else:
             target.unmount_with_operation(Gio.MountUnmountFlags.NONE, op, None, done)
+
+
+# ---------------- network (ExplorerApp methods)
+def _open_uri(self, win, view, uri):
+    """Open a network location (smb://host/share/...). Mounts it first if needed."""
+    u = urllib.parse.urlparse(uri)
+    if u.scheme == "smb" and not u.path.strip("/"):
+        view.navigate(host_loc(f"smb://{u.hostname}/"))
+        return
+    gf = Gio.File.new_for_uri(uri)
+
+    def go():
+        p = gf.get_path()
+        if not p:
+            info_dialog(win, "Can't show this folder",
+                        "The network folder is connected, but File Explorer needs gvfs-fuse to open it.\n\n"
+                        "Install it with:  sudo apt install gvfs-fuse  and then log out and back in.")
+            return
+        view.navigate(p)
+
+    try:
+        gf.find_enclosing_mount(None)
+        go()
+        return
+    except GLib.Error:
+        pass
+
+    def done(f, res):
+        try:
+            f.mount_enclosing_volume_finish(res)
+        except GLib.Error as e:
+            if not e.matches(Gio.io_error_quark(), Gio.IOErrorEnum.ALREADY_MOUNTED):
+                if not e.matches(Gio.io_error_quark(), Gio.IOErrorEnum.FAILED_HANDLED):
+                    info_dialog(win, "Couldn't open the network folder", e.message)
+                return
+        go()
+    gf.mount_enclosing_volume(Gio.MountMountFlags.NONE, NetMountOp(win), None, done)
+
+
+def _open_network_path(self, win, view, text):
+    t = text.strip()
+    if t.startswith("\\\\"):
+        t = "smb://" + t.lstrip("\\").replace("\\", "/")
+    elif t.startswith("//"):
+        t = "smb:" + t
+    elif "://" not in t:
+        t = "smb://" + t.replace("\\", "/")
+    parts = urllib.parse.urlparse(t)
+    if not parts.hostname:
+        info_dialog(win, "File Explorer", f"'{text}' isn't a network address. Try \\\\server\\share.")
+        return
+    path = "/".join(urllib.parse.quote(seg) for seg in urllib.parse.unquote(parts.path).split("/"))
+    self.open_uri(win, view, f"{parts.scheme}://{parts.netloc}{path}")
+
+
+def _pick_and_share(self, win):
+    dlg = Gtk.FileChooserDialog(title="Pick a folder to share", transient_for=win,
+                                action=Gtk.FileChooserAction.SELECT_FOLDER)
+    dlg.add_buttons("Cancel", Gtk.ResponseType.CANCEL, "Share", Gtk.ResponseType.OK)
+    dlg.set_current_folder(HOME)
+    r = dlg.run()
+    path = dlg.get_filename()
+    dlg.destroy()
+    if r == Gtk.ResponseType.OK and path:
+        self.share_folder(win, path)
+
+
+def _share_folder(self, win, path):
+    if not samba_installed():
+        info_dialog(win, "Sharing needs Samba", "Install it with:  sudo apt install samba")
+        return
+    if not helper_available():
+        info_dialog(win, "Sharing isn't set up", "Run the File Explorer installer again to turn on sharing.")
+        return
+    existing = share_for_path(path)
+    if existing:
+        info_dialog(win, "Already shared",
+                    f"This folder is already shared as \\\\{server_name()}\\{existing['name']}")
+        return
+    box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+    box.pack_start(label("Share name"), False, False, 0)
+    ent = Gtk.Entry()
+    add_cls(ent, "field")
+    ent.set_text(share_name_from(path))
+    ent.set_activates_default(True)
+    box.pack_start(ent, False, False, 0)
+    rw = Gtk.CheckButton(label="Let people change, add and delete files")
+    rw.set_active(True)
+    box.pack_start(rw, False, False, 0)
+    note = label("People on your network open it in File Explorer on Windows (or Finder on a Mac) "
+                 "and sign in with your Samba username and password.", "ter", wrap=True)
+    note.set_max_width_chars(52)
+    box.pack_start(note, False, False, 0)
+    dlg = WinDialog(win, f"Share \"{os.path.basename(path.rstrip('/')) or path}\"", None, primary="Share", extra=box)
+
+    def done(ok):
+        if not ok:
+            return
+        name = ent.get_text().strip()
+        if not re.match(r"^[A-Za-z0-9_-]{1,40}$", name):
+            info_dialog(win, "Pick another name", "Use letters, numbers, - or _ only (no spaces), up to 40.")
+            return
+
+        def work():
+            ok2, msg = run_helper("share-add", name, path, "rw" if rw.get_active() else "ro")
+            GLib.idle_add(finished, ok2, msg, name)
+        threading.Thread(target=work, daemon=True).start()
+
+    def finished(ok2, msg, name):
+        if ok2:
+            srv = server_name()
+            info_dialog(win, "Folder shared",
+                        f"Open it from another computer at:\n\n\\\\{srv}\\{name}\n\n"
+                        f"On a Mac use  smb://{srv.lower()}.local/{name}")
+        else:
+            info_dialog(win, "Couldn't share the folder", msg or "Unknown error")
+        self._net_changed()
+        return False
+    dlg.ask(done)
+    ent.grab_focus()
+
+
+def _unshare(self, win, name):
+    def go(ok):
+        if not ok:
+            return
+
+        def work():
+            ok2, msg = run_helper("share-remove", name)
+            GLib.idle_add(finished, ok2, msg)
+        threading.Thread(target=work, daemon=True).start()
+
+    def finished(ok2, msg):
+        if not ok2:
+            info_dialog(win, "Couldn't stop sharing", msg or "Unknown error")
+        self._net_changed()
+        return False
+    confirm(win, "Stop sharing", f"Stop sharing \"{name}\" on the network? The folder and its files stay on this Pi.",
+            "Stop sharing", go)
+
+
+def _net_changed(self):
+    for v in self.all_views():
+        if v.mode == "net":
+            v.load()
+    for w in self.windows():
+        w.on_selection(w.cur)
+
+
+ExplorerApp.open_uri = _open_uri
+ExplorerApp.open_network_path = _open_network_path
+ExplorerApp.pick_and_share = _pick_and_share
+ExplorerApp.share_folder = _share_folder
+ExplorerApp.unshare = _unshare
+ExplorerApp._net_changed = _net_changed
 
 
 def main():

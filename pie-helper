@@ -1,0 +1,155 @@
+#!/usr/bin/python3
+# Root helper for File Explorer (pi-explorer). Installed root-owned and run through sudo.
+# It only shares or stops sharing folders over the network (Samba), with checked input.
+import os
+import pwd
+import re
+import shutil
+import subprocess
+import sys
+import time
+
+CONF = "/etc/samba/smb.conf"
+INC = "/etc/samba/pi-explorer-shares.conf"
+INCLUDE_LINE = f"include = {INC}"
+NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
+RESERVED = {"global", "homes", "printers", "print$", "ipc$"}
+ALLOWED = ("/home/", "/srv/", "/mnt/", "/media/", "/opt/", "/data/")
+
+
+def die(msg, code=1):
+    print(msg)
+    sys.exit(code)
+
+
+def caller():
+    name = os.environ.get("SUDO_USER", "")
+    try:
+        pw = pwd.getpwnam(name)
+    except KeyError:
+        die("Unknown user.")
+    if pw.pw_uid == 0:
+        die("Run File Explorer as your normal user.")
+    return pw
+
+
+def read_sections():
+    secs = []
+    try:
+        with open(INC) as f:
+            txt = f.read()
+    except OSError:
+        return secs
+    for block in re.split(r"(?m)^(?=\[)", txt):
+        m = re.match(r"\[(.+)\]", block)
+        if m:
+            secs.append((m.group(1), block.rstrip() + "\n"))
+    return secs
+
+
+def write_sections(secs):
+    body = "# Network shares made with File Explorer (pi-explorer). Edit with File Explorer.\n\n"
+    body += "\n".join(b for _, b in secs)
+    tmp = INC + ".tmp"
+    with open(tmp, "w") as f:
+        f.write(body)
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, INC)
+
+
+def main_sections():
+    names = set()
+    try:
+        with open(CONF) as f:
+            for ln in f:
+                m = re.match(r"^\s*\[(.+)\]\s*$", ln)
+                if m:
+                    names.add(m.group(1).lower())
+    except OSError:
+        pass
+    return names
+
+
+def ensure_include():
+    with open(CONF) as f:
+        txt = f.read()
+    if INCLUDE_LINE in txt:
+        return
+    shutil.copy(CONF, f"{CONF}.bak-pi-explorer-{int(time.time())}")
+    with open(CONF, "a") as f:
+        f.write(f"\n# Added by File Explorer (pi-explorer)\n{INCLUDE_LINE}\n")
+
+
+def check_and_reload(backup):
+    tp = shutil.which("testparm") or "/usr/bin/testparm"
+    r = subprocess.run([tp, "-s", "--suppress-prompt"], capture_output=True, text=True)
+    if r.returncode != 0:
+        if backup is not None:
+            write_sections(backup)
+        die("Samba rejected the change: " + (r.stderr.strip().splitlines() or ["unknown error"])[-1])
+    ok = subprocess.run(["smbcontrol", "smbd", "reload-config"], capture_output=True).returncode == 0
+    if not ok:
+        subprocess.run(["systemctl", "reload-or-restart", "smbd"], capture_output=True)
+
+
+def share_add(name, path, mode):
+    pw = caller()
+    if not NAME_RE.match(name) or name.lower() in RESERVED:
+        die("Use a share name with letters, numbers, - or _ (up to 40).")
+    if mode not in ("rw", "ro"):
+        die("Bad mode.")
+    if "\n" in path or "\r" in path:
+        die("Bad folder.")
+    real = os.path.realpath(path)
+    if not os.path.isdir(real):
+        die("That folder doesn't exist.")
+    if not real.startswith(ALLOWED):
+        die("Only folders in /home, /srv, /mnt, /media, /opt or /data can be shared.")
+    if real.startswith("/home/") and os.stat(real).st_uid != pw.pw_uid:
+        die("You can only share your own folders in /home.")
+    if not os.path.exists(CONF):
+        die("Samba is not installed. Install it with: sudo apt install samba")
+    secs = read_sections()
+    if name.lower() in main_sections() or any(n.lower() == name.lower() for n, _ in secs):
+        die(f"There is already a share named {name}. Pick another name.")
+    backup = list(secs)
+    block = (f"[{name}]\n"
+             f"   comment = Shared with File Explorer\n"
+             f"   path = {real}\n"
+             f"   browseable = yes\n"
+             f"   read only = {'no' if mode == 'rw' else 'yes'}\n"
+             f"   force user = {pw.pw_name}\n"
+             f"   create mask = 0664\n"
+             f"   directory mask = 0775\n")
+    secs.append((name, block))
+    write_sections(secs)
+    ensure_include()
+    check_and_reload(backup)
+    print("ok")
+
+
+def share_remove(name):
+    caller()
+    secs = read_sections()
+    keep = [(n, b) for n, b in secs if n != name]
+    if len(keep) == len(secs):
+        die("That share wasn't made with File Explorer, so it can't be removed here.")
+    write_sections(keep)
+    check_and_reload(secs)
+    print("ok")
+
+
+def main():
+    a = sys.argv[1:]
+    if len(a) == 4 and a[0] == "share-add":
+        share_add(a[1], a[2], a[3])
+    elif len(a) == 2 and a[0] == "share-remove":
+        share_remove(a[1])
+    elif a == ["check"]:
+        print("ok")
+    else:
+        die("Usage: pie-helper share-add NAME PATH rw|ro | share-remove NAME | check", 2)
+
+
+if __name__ == "__main__":
+    main()

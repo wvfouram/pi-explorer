@@ -1,0 +1,14 @@
+#!/bin/sh
+# Installed by File Explorer (pi-explorer). The real program is /usr/bin/pcmanfm.real.
+# Desktop background/icons and preferences keep using the real pcmanfm.
+# Everything else (opening folders) goes to File Explorer.
+for a in "$@"; do
+  case "$a" in
+    --desktop*|-d|--profile*|-p|--wallpaper*|-w|--set-wallpaper*|--wallpaper-mode*|--show-pref*|--daemon-mode|--one-screen|--quit|--help*|--version|-h)
+      exec /usr/bin/pcmanfm.real "$@" ;;
+  esac
+done
+if [ -x /usr/local/bin/pi-explorer ]; then
+  exec /usr/local/bin/pi-explorer "$@"
+fi
+exec /usr/bin/pcmanfm.real "$@"
